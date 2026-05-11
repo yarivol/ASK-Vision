@@ -8,7 +8,6 @@ from ui_main import LoginDialog, MainWindow
 if __name__ == "__main__":
     app = QApplication(sys.argv)
 
-    # === Splash Screen ===
     splash = QSplashScreen()
     splash.setStyleSheet("""
         background-color: #1e1e1e; 
@@ -24,10 +23,10 @@ if __name__ == "__main__":
     splash.show()
     app.processEvents()
 
-    # Закрываем сплэш через 700 мс
+
     QTimer.singleShot(700, splash.close)
 
-    # Авторизация
+
     login = LoginDialog()
     if login.exec_() == QDialog.Accepted and login.accepted:
         window = MainWindow()
