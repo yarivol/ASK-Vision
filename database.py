@@ -17,7 +17,6 @@ def init_db():
                     timestamp TEXT,
                     file_path TEXT,
                     description TEXT)''')
-    # demo admin
     c.execute("INSERT OR IGNORE INTO users VALUES (1, 'admin', '5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8', 'admin')")  # password: password
     conn.commit()
     conn.close()
