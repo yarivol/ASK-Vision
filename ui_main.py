@@ -154,7 +154,6 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         main_layout.addWidget(tabs, 1)
 
-        # Live View
         live_tab = QWidget()
         live_layout = QHBoxLayout(live_tab)
         self.camera_list = QListWidget()
@@ -169,7 +168,6 @@ class MainWindow(QMainWindow):
         live_layout.addWidget(scroll, 1)
         tabs.addTab(live_tab, "📹 Live View")
 
-        # Журнал событий
         events_tab = QWidget()
         events_layout = QVBoxLayout(events_tab)
         self.events_table = QTableWidget(0, 4)
@@ -192,7 +190,6 @@ class MainWindow(QMainWindow):
         events_layout.addLayout(btn_layout)
         tabs.addTab(events_tab, "📋 Журнал событий")
 
-        # Просмотр записей
         player_tab = QWidget()
         player_layout = QVBoxLayout(player_tab)
         self.recordings_list = QListWidget()
@@ -209,7 +206,6 @@ class MainWindow(QMainWindow):
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Готово к работе")
 
-        # Горячие клавиши
         from PyQt5.QtWidgets import QShortcut
         from PyQt5.QtGui import QKeySequence
         QShortcut(QKeySequence("F5"), self, self.load_events)
@@ -474,7 +470,6 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
-# ==================== ЗАПУСК ====================
 if __name__ == "__main__":
     import sys
     from PyQt5.QtWidgets import QApplication
