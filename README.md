@@ -25,6 +25,6 @@
 git clone https://github.com/yarivol/ASK-Vision.git
 cd ASK-Vision
 python -m venv venv
-venv\Scripts\activate          # Windows
+venv\Scripts\activate          # only Windows
 pip install -r requirements.txt
 python main.py
