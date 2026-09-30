@@ -53,6 +53,9 @@ class CameraThread(QThread):
     def run(self):
         self.cap = self.create_capture()
         if not self.cap or not self.cap.isOpened():
+            if self.cap:
+                self.cap.release()
+                self.cap = None
             self.emit_status("ОТКЛЮЧЕНА")
             return
 
@@ -60,11 +63,29 @@ class CameraThread(QThread):
         self.fps = self.get_capture_fps()
         self.pre_buffer = deque(maxlen=max(int(self.pre_record * self.fps), 1))
 
-        while self.running and self.cap.isOpened():
+        reconnect_delay = 1.0
+        while self.running:
+            if self.cap is None:
+                self.emit_status("ОТКЛЮЧЕНА")
+                time.sleep(reconnect_delay)
+                if not self.running:
+                    break
+                candidate = self.create_capture()
+                if candidate and candidate.isOpened():
+                    self.cap = candidate
+                    self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 3)
+                    reconnect_delay = 1.0
+                else:
+                    if candidate:
+                        candidate.release()
+                    reconnect_delay = min(reconnect_delay * 2, 10.0)
+                continue
+
             ret, frame = self.cap.read()
             if not ret:
-                self.emit_status("ОТКЛЮЧЕНА")
-                time.sleep(1)
+                self.stop_recording()
+                self.cap.release()
+                self.cap = None
                 continue
 
             self.emit_status("АКТИВНА")
@@ -112,6 +133,7 @@ class CameraThread(QThread):
 
         if self.cap:
             self.cap.release()
+            self.cap = None
         self.stop_recording()
 
     def create_capture(self):

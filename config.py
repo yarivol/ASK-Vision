@@ -15,4 +15,4 @@ def load_cameras():
 
 def save_cameras(cameras):
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-        json.dump(cameras, f, ensure_ascii=False, indent=2) # говно а не реализация
+        json.dump(cameras, f, ensure_ascii=False, indent=2)

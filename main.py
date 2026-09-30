@@ -48,7 +48,8 @@ if __name__ == "__main__":
 
     if app_settings.get("autologin_enabled"):
         autologin_user = get_user_by_username(app_settings.get("autologin_user", "admin"))
-        if autologin_user:
+        # Если у пользователя дефолтный пароль — автологин пропускаем, чтобы показать смену пароля
+        if autologin_user and not autologin_user.get("must_change_password"):
             window = MainWindow(autologin_user)
             window.show()
             sys.exit(app.exec_())

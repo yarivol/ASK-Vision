@@ -53,19 +53,20 @@ from config import load_cameras, save_cameras
 from database import (
     PERMISSION_LABELS,
     authenticate_user,
+    change_own_password,
     check_database_health,
     create_user,
     delete_user,
     fetch_usernames,
     fetch_users,
     get_default_permissions,
-    get_user_by_username,
     get_user_by_id,
     init_db,
     update_user,
     get_db,
 )
 from settings import load_app_settings, save_app_settings, DEFAULT_SETTINGS, sync_autostart
+from utils import validate_password_strength
 
 STYLE_OPTIONS = {
     "Модерн": "modern",
@@ -375,12 +376,50 @@ def apply_appearance(app, style_name, theme_name):
     app.setStyleSheet(APPEARANCE_STYLESHEETS.get((style_name, theme_name), MODERN_DARK_STYLESHEET))
 
 
-def apply_theme(app, theme_name):
-    apply_appearance(app, "modern", theme_name)
+class ForcePasswordChangeDialog(QDialog):
+    """Диалог принудительной смены дефолтного пароля при первом входе."""
 
+    def __init__(self, username, parent=None):
+        super().__init__(parent)
+        self.new_password = None
+        self.setWindowTitle("Смена пароля")
+        self.setModal(True)
+        self.setMinimumWidth(360)
 
-def apply_dark_theme(app):
-    apply_appearance(app, "modern", "dark")
+        layout = QVBoxLayout(self)
+        hint = QLabel(
+            f"У учётной записи «{username}» установлен стандартный пароль.\n"
+            "Перед продолжением его необходимо сменить."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        form = QFormLayout()
+        self.password1 = QLineEdit()
+        self.password1.setEchoMode(QLineEdit.Password)
+        self.password2 = QLineEdit()
+        self.password2.setEchoMode(QLineEdit.Password)
+        form.addRow("Новый пароль:", self.password1)
+        form.addRow("Повторите:", self.password2)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.validate_and_accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def validate_and_accept(self):
+        password = self.password1.text()
+        error = validate_password_strength(password)
+        if error:
+            QMessageBox.warning(self, "Ошибка", error)
+            return
+        if password != self.password2.text():
+            QMessageBox.warning(self, "Ошибка", "Пароли не совпадают")
+            return
+
+        self.new_password = password
+        self.accept()
 
 
 class LoginDialog(QDialog):
@@ -475,6 +514,17 @@ class LoginDialog(QDialog):
         if not user:
             QMessageBox.warning(self, "Ошибка входа", "Неверный логин или пароль")
             return
+
+        if user.get("must_change_password"):
+            change_dialog = ForcePasswordChangeDialog(user["username"], self)
+            if change_dialog.exec_() != QDialog.Accepted:
+                return
+            try:
+                change_own_password(user["id"], change_dialog.new_password)
+            except ValueError as error:
+                QMessageBox.warning(self, "Ошибка", str(error))
+                return
+            QMessageBox.information(self, "Готово", "Новый пароль сохранён")
 
         self.current_user = user
         self.accepted = True
@@ -581,6 +631,12 @@ class UserEditorDialog(QDialog):
         if not self.user and not password:
             QMessageBox.warning(self, "Ошибка", "Для нового пользователя нужен пароль")
             return
+
+        if password:
+            error = validate_password_strength(password)
+            if error:
+                QMessageBox.warning(self, "Ошибка", error)
+                return
 
         self.accept()
 
@@ -1470,10 +1526,6 @@ class MainWindow(QMainWindow):
         self.start_all_cameras()
         self.status_bar.showMessage("Все камеры перезапущены", 3000)
 
-    def change_grid(self):
-        self.grid_cols = 3 if self.grid_cols == 2 else 2
-        self.rebuild_grid()
-
     def rebuild_grid(self):
         for i in reversed(range(self.video_grid.count())):
             widget = self.video_grid.itemAt(i).widget()
@@ -1959,26 +2011,3 @@ class MainWindow(QMainWindow):
             self.tray_icon.hide()
         self.stop_all_cameras()
         event.accept()
-
-
-if __name__ == "__main__":
-    import sys
-
-    app = QApplication(sys.argv)
-    init_db()
-    app_settings = load_app_settings()
-    apply_appearance(app, app_settings.get("style", "modern"), app_settings.get("theme", "dark"))
-
-    if app_settings.get("autologin_enabled"):
-        autologin_user = get_user_by_username(app_settings.get("autologin_user", "admin"))
-        if autologin_user:
-            window = MainWindow(autologin_user)
-            window.show()
-            sys.exit(app.exec_())
-
-    login = LoginDialog()
-    if login.exec_() == QDialog.Accepted and login.accepted:
-        window = MainWindow(login.current_user)
-        window.show()
-        sys.exit(app.exec_())
-    sys.exit(0)

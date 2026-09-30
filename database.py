@@ -1,23 +1,37 @@
+import hashlib
 import json
 import sqlite3
 
-from utils import hash_password
+from utils import (
+    hash_password,
+    is_legacy_hash,
+    validate_password_strength,
+    verify_password,
+)
 
 DB_NAME = "database.db"
+DB_TIMEOUT_SECONDS = 10
+
+# Legacy SHA-256 С…РµС€Рё РІСЃС‚СЂРѕРµРЅРЅС‹С… СѓС‡С‘С‚РЅС‹С… Р·Р°РїРёСЃРµР№ вЂ” РґР»СЏ РїРѕРјРµС‚РєРё must_change_password
+# РІ СѓР¶Рµ СЃСѓС‰РµСЃС‚РІСѓСЋС‰РёС… Р‘Р”, СЃРѕР·РґР°РЅРЅС‹С… РґРѕ РІРІРµРґРµРЅРёСЏ С„Р»Р°РіР°.
+LEGACY_DEFAULT_HASHES = {
+    "admin": hashlib.sha256(b"password").hexdigest(),
+    "operator": hashlib.sha256(b"operator").hexdigest(),
+}
 
 PERMISSION_LABELS = {
     "live_view": "Live View",
-    "events_tab": "Журнал событий",
-    "recordings_tab": "Просмотр записей",
-    "add_camera": "Добавление камер",
-    "delete_camera": "Удаление камер",
-    "camera_settings": "Настройки камер",
-    "toggle_cameras": "Запуск и остановка камер",
-    "restart_cameras": "Перезапуск камер",
-    "export_csv": "Экспорт CSV",
-    "clear_events": "Очистка журнала",
-    "manage_users": "Управление пользователями",
-    "recording_settings": "Настройки записи",
+    "events_tab": "Р–СѓСЂРЅР°Р» СЃРѕР±С‹С‚РёР№",
+    "recordings_tab": "РџСЂРѕСЃРјРѕС‚СЂ Р·Р°РїРёСЃРµР№",
+    "add_camera": "Р”РѕР±Р°РІР»РµРЅРёРµ РєР°РјРµСЂ",
+    "delete_camera": "РЈРґР°Р»РµРЅРёРµ РєР°РјРµСЂ",
+    "camera_settings": "РќР°СЃС‚СЂРѕР№РєРё РєР°РјРµСЂ",
+    "toggle_cameras": "Р—Р°РїСѓСЃРє Рё РѕСЃС‚Р°РЅРѕРІРєР° РєР°РјРµСЂ",
+    "restart_cameras": "РџРµСЂРµР·Р°РїСѓСЃРє РєР°РјРµСЂ",
+    "export_csv": "Р­РєСЃРїРѕСЂС‚ CSV",
+    "clear_events": "РћС‡РёСЃС‚РєР° Р¶СѓСЂРЅР°Р»Р°",
+    "manage_users": "РЈРїСЂР°РІР»РµРЅРёРµ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏРјРё",
+    "recording_settings": "РќР°СЃС‚СЂРѕР№РєРё Р·Р°РїРёСЃРё",
 }
 
 
@@ -80,26 +94,32 @@ def row_to_user(row):
         "password_hash": row[2],
         "role": row[3],
         "permissions": permissions_from_json(row[4], row[3]),
+        "must_change_password": bool(row[5]),
     }
 
 
 def get_db():
-    return sqlite3.connect(DB_NAME)
+    return sqlite3.connect(DB_NAME, timeout=DB_TIMEOUT_SECONDS)
 
 
-def ensure_permissions_column(cursor):
-    cursor.execute("PRAGMA table_info(users)")
+def ensure_column(cursor, table, column, definition):
+    cursor.execute(f"PRAGMA table_info({table})")
     columns = {row[1] for row in cursor.fetchall()}
-    if "permissions" not in columns:
-        cursor.execute("ALTER TABLE users ADD COLUMN permissions TEXT")
+    if column not in columns:
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def count_admins(cursor):
+    cursor.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+    return cursor.fetchone()[0]
 
 
 def ensure_user(cursor, username, password, role):
     default_permissions = permissions_to_json(None, role)
     cursor.execute(
         """
-        INSERT OR IGNORE INTO users (username, password_hash, role, permissions)
-        VALUES (?, ?, ?, ?)
+        INSERT OR IGNORE INTO users (username, password_hash, role, permissions, must_change_password)
+        VALUES (?, ?, ?, ?, 1)
         """,
         (username, hash_password(password), role, default_permissions),
     )
@@ -117,6 +137,7 @@ def ensure_user(cursor, username, password, role):
 def init_db():
     conn = get_db()
     c = conn.cursor()
+    c.execute("PRAGMA journal_mode=WAL")
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -128,7 +149,8 @@ def init_db():
         )
         """
     )
-    ensure_permissions_column(c)
+    ensure_column(c, "users", "permissions", "TEXT")
+    ensure_column(c, "users", "must_change_password", "INTEGER DEFAULT 0")
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS events (
@@ -143,6 +165,14 @@ def init_db():
 
     ensure_user(c, "admin", "password", "admin")
     ensure_user(c, "operator", "operator", "operator")
+
+    # РџРѕРјРµС‡Р°РµРј СѓС‡С‘С‚РєРё СЃ РґРµС„РѕР»С‚РЅС‹РјРё РїР°СЂРѕР»СЏРјРё, СЃРѕР·РґР°РЅРЅС‹Рµ РґРѕ РІРІРµРґРµРЅРёСЏ С„Р»Р°РіР°
+    for username, legacy_hash in LEGACY_DEFAULT_HASHES.items():
+        c.execute(
+            "UPDATE users SET must_change_password = 1 WHERE username = ? AND password_hash = ?",
+            (username, legacy_hash),
+        )
+
     conn.commit()
     conn.close()
 
@@ -159,7 +189,7 @@ def fetch_usernames():
 def get_user_by_id(user_id):
     conn = get_db()
     c = conn.cursor()
-    c.execute("SELECT id, username, password_hash, role, permissions FROM users WHERE id = ?", (user_id,))
+    c.execute("SELECT id, username, password_hash, role, permissions, must_change_password FROM users WHERE id = ?", (user_id,))
     user = row_to_user(c.fetchone())
     conn.close()
     return user
@@ -168,7 +198,7 @@ def get_user_by_id(user_id):
 def get_user_by_username(username):
     conn = get_db()
     c = conn.cursor()
-    c.execute("SELECT id, username, password_hash, role, permissions FROM users WHERE username = ?", (username,))
+    c.execute("SELECT id, username, password_hash, role, permissions, must_change_password FROM users WHERE username = ?", (username,))
     user = row_to_user(c.fetchone())
     conn.close()
     return user
@@ -178,28 +208,56 @@ def authenticate_user(username, password):
     conn = get_db()
     c = conn.cursor()
     c.execute(
-        "SELECT id, username, password_hash, role, permissions FROM users WHERE username = ?",
+        "SELECT id, username, password_hash, role, permissions, must_change_password FROM users WHERE username = ?",
         (username,),
     )
     user = row_to_user(c.fetchone())
-    conn.close()
 
-    if not user or user["password_hash"] != hash_password(password):
+    if not user or not verify_password(password, user["password_hash"]):
+        conn.close()
         return None
 
+    # Прозрачный апгрейд legacy-хеша (несолёный SHA-256) на PBKDF2
+    if is_legacy_hash(user["password_hash"]):
+        c.execute(
+            "UPDATE users SET password_hash = ? WHERE id = ?",
+            (hash_password(password), user["id"]),
+        )
+        conn.commit()
+
+    conn.close()
     return user
+
+
+def change_own_password(user_id, new_password):
+    error = validate_password_strength(new_password)
+    if error:
+        raise ValueError(error)
+
+    conn = get_db()
+    c = conn.cursor()
+    c.execute(
+        "UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?",
+        (hash_password(new_password), user_id),
+    )
+    conn.commit()
+    conn.close()
 
 
 def fetch_users():
     conn = get_db()
     c = conn.cursor()
-    c.execute("SELECT id, username, password_hash, role, permissions FROM users ORDER BY username")
+    c.execute("SELECT id, username, password_hash, role, permissions, must_change_password FROM users ORDER BY username")
     users = [row_to_user(row) for row in c.fetchall()]
     conn.close()
     return users
 
 
 def create_user(username, password, role, permissions):
+    error = validate_password_strength(password)
+    if error:
+        raise ValueError(error)
+
     conn = get_db()
     c = conn.cursor()
     c.execute(
@@ -217,7 +275,21 @@ def update_user(user_id, username, role, permissions, password=None):
     conn = get_db()
     c = conn.cursor()
 
+    c.execute("SELECT role FROM users WHERE id = ?", (user_id,))
+    row = c.fetchone()
+    if not row:
+        conn.close()
+        raise ValueError("Пользователь не найден")
+
+    if row[0] == "admin" and role != "admin" and count_admins(c) <= 1:
+        conn.close()
+        raise ValueError("Нельзя понизить роль последнего администратора")
+
     if password:
+        error = validate_password_strength(password)
+        if error:
+            conn.close()
+            raise ValueError(error)
         c.execute(
             """
             UPDATE users
@@ -247,14 +319,12 @@ def delete_user(user_id):
     row = c.fetchone()
     if not row:
         conn.close()
-        raise ValueError("Пользователь не найден")
+        raise ValueError("РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ РЅРµ РЅР°Р№РґРµРЅ")
 
     if row[0] == "admin":
-        c.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
-        admin_count = c.fetchone()[0]
-        if admin_count <= 1:
+        if count_admins(c) <= 1:
             conn.close()
-            raise ValueError("Нельзя удалить последнего администратора")
+            raise ValueError("РќРµР»СЊР·СЏ СѓРґР°Р»РёС‚СЊ РїРѕСЃР»РµРґРЅРµРіРѕ Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂР°")
 
     c.execute("DELETE FROM users WHERE id = ?", (user_id,))
     conn.commit()
@@ -270,6 +340,6 @@ def check_database_health():
         c.execute("SELECT COUNT(*) FROM events")
         events_count = c.fetchone()[0]
         conn.close()
-        return True, f"БД: OK ({users_count} users, {events_count} events)"
+        return True, f"Р‘Р”: OK ({users_count} users, {events_count} events)"
     except Exception as error:
-        return False, f"БД: ошибка ({error})"
+        return False, f"Р‘Р”: РѕС€РёР±РєР° ({error})"
